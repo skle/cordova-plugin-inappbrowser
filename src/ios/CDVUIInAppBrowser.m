@@ -31,7 +31,7 @@
 #define    kInAppBrowserToolbarBarPositionTop @"top"
 
 #define    TOOLBAR_HEIGHT 44.0
-#define    STATUSBAR_HEIGHT 20.0
+#define    STATUSBAR_HEIGHT 0
 #define    LOCATIONBAR_HEIGHT 21.0
 #define    FOOTER_HEIGHT ((TOOLBAR_HEIGHT) + (LOCATIONBAR_HEIGHT))
 
@@ -95,6 +95,7 @@ static CDVUIInAppBrowser* instance = nil;
     NSString* url = [command argumentAtIndex:0];
     NSString* target = [command argumentAtIndex:1 withDefault:kInAppBrowserTargetSelf];
     NSString* options = [command argumentAtIndex:2 withDefault:@"" andClass:[NSString class]];
+    NSString* headers = [command argumentAtIndex:3 withDefault:@"" andClass:[NSString class]];
 
     self.callbackId = command.callbackId;
 
@@ -111,11 +112,11 @@ static CDVUIInAppBrowser* instance = nil;
         }
 
         if ([target isEqualToString:kInAppBrowserTargetSelf]) {
-            [self openInCordovaWebView:absoluteUrl withOptions:options];
+            [self openInCordovaWebView:absoluteUrl withOptions:options withHeaders:headers];
         } else if ([target isEqualToString:kInAppBrowserTargetSystem]) {
             [self openInSystem:absoluteUrl];
         } else { // _blank or anything else
-            [self openInInAppBrowser:absoluteUrl withOptions:options];
+            [self openInInAppBrowser:absoluteUrl withOptions:options withHeaders:headers];
         }
 
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
@@ -127,7 +128,7 @@ static CDVUIInAppBrowser* instance = nil;
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
-- (void)openInInAppBrowser:(NSURL*)url withOptions:(NSString*)options
+- (void)openInInAppBrowser:(NSURL*)url withOptions:(NSString*)options withHeaders:(NSString*)headers
 {
     CDVInAppBrowserOptions* browserOptions = [CDVInAppBrowserOptions parseOptions:options];
 
@@ -229,7 +230,7 @@ static CDVUIInAppBrowser* instance = nil;
     }
     _waitForBeforeload = ![_beforeload isEqualToString:@""];
 
-    [self.inAppBrowserViewController navigateTo:url];
+    [self.inAppBrowserViewController navigateTo:url headers:headers];
     if (!browserOptions.hidden) {
         [self show:nil];
     }
@@ -267,7 +268,51 @@ static CDVUIInAppBrowser* instance = nil;
             [tmpWindow setRootViewController:tmpController];
 
             [tmpWindow makeKeyAndVisible];
-            [tmpController presentViewController:nav animated:YES completion:nil];
+            [tmpController presentViewController:nav animated:NO completion:nil];
+        }
+    });
+}
+
+- (void)resize:(CDVInvokedUrlCommand*)command
+{
+    if (self.inAppBrowserViewController == nil) {
+        NSLog(@"Tried to resize IAB after it was closed.");
+        return;
+    }
+    if (_previousStatusBarStyle != -1) {
+        NSLog(@"Tried to resize IAB while already shown");
+        return;
+    }
+
+    _previousStatusBarStyle = [UIApplication sharedApplication].statusBarStyle;
+
+    __block CDVInAppBrowserNavigationController* nav = [[CDVInAppBrowserNavigationController alloc]
+                                   initWithRootViewController:self.inAppBrowserViewController];
+    nav.orientationDelegate = self.inAppBrowserViewController;
+    nav.navigationBarHidden = YES;
+    nav.modalPresentationStyle = self.inAppBrowserViewController.modalPresentationStyle;
+
+    __weak CDVUIInAppBrowser* weakSelf = self;
+
+    // Run later to avoid the "took a long time" log message.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (weakSelf.inAppBrowserViewController != nil) {
+
+			CGRect frame = CGRectMake(0,85,414,716);
+			
+            if (!tmpWindow) {
+                tmpWindow = [[UIWindow alloc] initWithFrame:frame];
+            }
+			else
+			{
+				tmpWindow.frame = frame;
+			}
+
+            UIViewController *tmpController = [[UIViewController alloc] init];
+            [tmpWindow setRootViewController:tmpController];
+
+            [tmpWindow makeKeyAndVisible];
+            [tmpController presentViewController:nav animated:NO completion:nil];
         }
     });
 }
@@ -291,16 +336,16 @@ static CDVUIInAppBrowser* instance = nil;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.inAppBrowserViewController != nil) {
             _previousStatusBarStyle = -1;
-            [self.inAppBrowserViewController.presentingViewController dismissViewControllerAnimated:YES completion:^{
+            [self.inAppBrowserViewController.presentingViewController dismissViewControllerAnimated:NO completion:^{
                 [[[[UIApplication sharedApplication] delegate] window] makeKeyAndVisible];
           }];
         }
     });
 }
 
-- (void)openInCordovaWebView:(NSURL*)url withOptions:(NSString*)options
+- (void)openInCordovaWebView:(NSURL*)url withOptions:(NSString*)options withHeaders:(NSString*)headers
 {
-    NSURLRequest* request = [NSURLRequest requestWithURL:url];
+    NSMutableURLRequest* request = [CDVInAppBrowserOptions createRequest:url headers:headers];
 
 #ifdef __CORDOVA_4_0_0
     // the webview engine itself will filter for this according to <allow-navigation> policy
@@ -341,7 +386,7 @@ static CDVUIInAppBrowser* instance = nil;
 
     NSURL* url = [NSURL URLWithString:urlStr];
     _waitForBeforeload = NO;
-    [self.inAppBrowserViewController navigateTo:url];
+    [self.inAppBrowserViewController navigateTo:url headers:nil];
 }
 
 -(void)createIframeBridge
@@ -962,9 +1007,9 @@ static CDVUIInAppBrowser* instance = nil;
     });
 }
 
-- (void)navigateTo:(NSURL*)url
+- (void)navigateTo:(NSURL*)url headers:(NSString*)headers
 {
-    NSURLRequest* request = [NSURLRequest requestWithURL:url];
+    NSMutableURLRequest* request = [CDVInAppBrowserOptions createRequest:url headers:headers];
 
     if (_userAgentLockToken != 0) {
         [self.webView loadRequest:request];
@@ -1037,7 +1082,7 @@ static CDVUIInAppBrowser* instance = nil;
     self.backButton.enabled = theWebView.canGoBack;
     self.forwardButton.enabled = theWebView.canGoForward;
 
-    NSLog(_browserOptions.hidespinner ? @"Yes" : @"No");
+    //NSLog(_browserOptions.hidespinner ? @"Yes" : @"No");
     if(!_browserOptions.hidespinner) {
         [self.spinner startAnimating];
     }

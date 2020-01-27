@@ -36,7 +36,7 @@
 #define    IAB_BRIDGE_NAME @"cordova_iab"
 
 #define    TOOLBAR_HEIGHT 44.0
-#define    STATUSBAR_HEIGHT 20.0
+#define    STATUSBAR_HEIGHT 0
 #define    LOCATIONBAR_HEIGHT 21.0
 #define    FOOTER_HEIGHT ((TOOLBAR_HEIGHT) + (LOCATIONBAR_HEIGHT))
 
@@ -101,6 +101,7 @@ static CDVWKInAppBrowser* instance = nil;
     NSString* url = [command argumentAtIndex:0];
     NSString* target = [command argumentAtIndex:1 withDefault:kInAppBrowserTargetSelf];
     NSString* options = [command argumentAtIndex:2 withDefault:@"" andClass:[NSString class]];
+    NSString* headers = [command argumentAtIndex:3 withDefault:@"" andClass:[NSString class]];
     
     self.callbackId = command.callbackId;
     
@@ -117,11 +118,11 @@ static CDVWKInAppBrowser* instance = nil;
         }
         
         if ([target isEqualToString:kInAppBrowserTargetSelf]) {
-            [self openInCordovaWebView:absoluteUrl withOptions:options];
+            [self openInCordovaWebView:absoluteUrl withOptions:options withHeaders:headers];
         } else if ([target isEqualToString:kInAppBrowserTargetSystem]) {
             [self openInSystem:absoluteUrl];
         } else { // _blank or anything else
-            [self openInInAppBrowser:absoluteUrl withOptions:options];
+            [self openInInAppBrowser:absoluteUrl withOptions:options withHeaders:headers];
         }
         
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
@@ -133,7 +134,7 @@ static CDVWKInAppBrowser* instance = nil;
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
-- (void)openInInAppBrowser:(NSURL*)url withOptions:(NSString*)options
+- (void)openInInAppBrowser:(NSURL*)url withOptions:(NSString*)options withHeaders:(NSString*)headers
 {
     CDVInAppBrowserOptions* browserOptions = [CDVInAppBrowserOptions parseOptions:options];
     
@@ -275,14 +276,14 @@ static CDVWKInAppBrowser* instance = nil;
     }
     _waitForBeforeload = ![_beforeload isEqualToString:@""];
     
-    [self.inAppBrowserViewController navigateTo:url];
+    [self.inAppBrowserViewController navigateTo:url headers:headers];
     if (!browserOptions.hidden) {
         [self show:nil withNoAnimate:browserOptions.hidden];
     }
 }
 
 - (void)show:(CDVInvokedUrlCommand*)command{
-    [self show:command withNoAnimate:NO];
+    [self show:command withNoAnimate:YES];
 }
 
 - (void)show:(CDVInvokedUrlCommand*)command withNoAnimate:(BOOL)noAnimate
@@ -338,6 +339,36 @@ static CDVWKInAppBrowser* instance = nil;
     });
 }
 
+- (void)resize:(CDVInvokedUrlCommand*)command{
+    [self resize:command withNoAnimate:NO];
+}
+
+- (void)resize:(CDVInvokedUrlCommand*)command withNoAnimate:(BOOL)noAnimate
+{
+    if (self.inAppBrowserViewController == nil) {
+        NSLog(@"Tried to resize IAB after it was closed.");
+        return;
+    }
+
+	NSArray* arguments = [command arguments];
+    CGFloat iPosX = [[arguments objectAtIndex:0] floatValue];
+    CGFloat iPosY = [[arguments objectAtIndex:1] floatValue];
+    CGFloat iWidth = [[arguments objectAtIndex:2] floatValue];
+	CGFloat iHeight = [[arguments objectAtIndex:3] floatValue];
+
+    __weak CDVWKInAppBrowser* weakSelf = self;
+    
+    // Run later to avoid the "took a long time" log message.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (weakSelf.inAppBrowserViewController != nil) {
+			CGRect frame = CGRectMake(iPosX,iPosY,iWidth,iHeight);
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+			strongSelf->tmpWindow.frame = frame;
+			//[self setWebViewFrame:self.view.bounds];
+        }
+    });
+}
+
 - (void)hide:(CDVInvokedUrlCommand*)command
 {
     // Set tmpWindow to hidden to make main webview responsive to touch again
@@ -361,14 +392,14 @@ static CDVWKInAppBrowser* instance = nil;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.inAppBrowserViewController != nil) {
             _previousStatusBarStyle = -1;
-            [self.inAppBrowserViewController.presentingViewController dismissViewControllerAnimated:YES completion:nil];
+            [self.inAppBrowserViewController.presentingViewController dismissViewControllerAnimated:NO completion:nil];
         }
     });
 }
 
-- (void)openInCordovaWebView:(NSURL*)url withOptions:(NSString*)options
+- (void)openInCordovaWebView:(NSURL*)url withOptions:(NSString*)options  withHeaders:(NSString*)headers
 {
-    NSURLRequest* request = [NSURLRequest requestWithURL:url];
+    NSMutableURLRequest* request = [CDVInAppBrowserOptions createRequest:url headers:headers];
     
 #ifdef __CORDOVA_4_0_0
     // the webview engine itself will filter for this according to <allow-navigation> policy
@@ -378,7 +409,7 @@ static CDVWKInAppBrowser* instance = nil;
     if ([self.commandDelegate URLIsWhitelisted:url]) {
         [self.webView loadRequest:request];
     } else { // this assumes the InAppBrowser can be excepted from the white-list
-        [self openInInAppBrowser:url withOptions:options];
+        [self openInInAppBrowser:url withOptions:options withHeaders:headers];
     }
 #endif
 }
@@ -392,6 +423,7 @@ static CDVWKInAppBrowser* instance = nil;
 - (void)loadAfterBeforeload:(CDVInvokedUrlCommand*)command
 {
     NSString* urlStr = [command argumentAtIndex:0];
+    NSString* customHeaders = [command argumentAtIndex:1];
 
     if ([_beforeload isEqualToString:@""]) {
         NSLog(@"unexpected loadAfterBeforeload called without feature beforeload=get|post");
@@ -408,7 +440,15 @@ static CDVWKInAppBrowser* instance = nil;
     NSURL* url = [NSURL URLWithString:urlStr];
     //_beforeload = @"";
     _waitForBeforeload = NO;
-    [self.inAppBrowserViewController navigateTo:url];
+    
+    if (urlStr == nil)
+    {
+	    [self.inAppBrowserViewController navigateTo:url headers:nil];
+	}
+	else
+	{
+		[self.inAppBrowserViewController navigateTo:url headers:customHeaders]; 
+	}
 }
 
 // This is a helper method for the inject{Script|Style}{Code|File} API calls, which
@@ -546,8 +586,7 @@ static CDVWKInAppBrowser* instance = nil;
 
     // When beforeload, on first URL change, initiate JS callback. Only after the beforeload event, continue.
     if (_waitForBeforeload && useBeforeLoad) {
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-                                                      messageAsDictionary:@{@"type":@"beforeload", @"url":[url absoluteString]}];
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:@{@"type":@"beforeload", @"url":[url absoluteString]}];
         [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
         
         [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
@@ -557,8 +596,7 @@ static CDVWKInAppBrowser* instance = nil;
     
     if(errorMessage != nil){
         NSLog(errorMessage);
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
-                                                      messageAsDictionary:@{@"type":@"loaderror", @"url":[url absoluteString], @"code": @"-1", @"message": errorMessage}];
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsDictionary:@{@"type":@"loaderror", @"url":[url absoluteString], @"code": @"-1", @"message": errorMessage}];
         [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
     }
@@ -571,8 +609,7 @@ static CDVWKInAppBrowser* instance = nil;
     }
     else if ((self.callbackId != nil) && isTopLevelNavigation) {
         // Send a loadstart event for each top-level navigation (includes redirects).
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK
-                                                      messageAsDictionary:@{@"type":@"loadstart", @"url":[url absoluteString]}];
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsDictionary:@{@"type":@"loadstart", @"url":[url absoluteString]}];
         [pluginResult setKeepCallback:[NSNumber numberWithBool:YES]];
         
         [self.commandDelegate sendPluginResult:pluginResult callbackId:self.callbackId];
@@ -636,7 +673,7 @@ static CDVWKInAppBrowser* instance = nil;
 
 - (void)didStartProvisionalNavigation:(WKWebView*)theWebView
 {
-    NSLog(@"didStartProvisionalNavigation");
+    //NSLog(@"didStartProvisionalNavigation");
 //    self.inAppBrowserViewController.currentURL = theWebView.URL;
 }
 
@@ -773,15 +810,12 @@ BOOL isExiting = FALSE;
     }else{ // iOS 9
         configuration.mediaPlaybackRequiresUserAction = _browserOptions.mediaplaybackrequiresuseraction;
     }
-    
-    
 
-    self.webView = [[WKWebView alloc] initWithFrame:webViewBounds configuration:configuration];
-    
+	
+	self.webView = [[WKWebView alloc] initWithFrame:webViewBounds configuration:configuration];
     [self.view addSubview:self.webView];
     [self.view sendSubviewToBack:self.webView];
-    
-    
+
     self.webView.navigationDelegate = self;
     self.webView.UIDelegate = self.webViewUIDelegate;
     self.webView.backgroundColor = [UIColor whiteColor];
@@ -930,7 +964,7 @@ BOOL isExiting = FALSE;
     self.closeButton.enabled = YES;
     // If color on closebutton is requested then initialize with that that color, otherwise use initialize with default
     self.closeButton.tintColor = colorString != nil ? [self colorFromHexString:colorString] : [UIColor colorWithRed:60.0 / 255.0 green:136.0 / 255.0 blue:230.0 / 255.0 alpha:1];
-    
+
     NSMutableArray* items = [self.toolbar.items mutableCopy];
     [items replaceObjectAtIndex:buttonIndex withObject:self.closeButton];
     [self.toolbar setItems:items];
@@ -1090,9 +1124,9 @@ BOOL isExiting = FALSE;
     });
 }
 
-- (void)navigateTo:(NSURL*)url
+- (void)navigateTo:(NSURL*)url headers:(NSString*)headers
 {
-    NSURLRequest* request = [NSURLRequest requestWithURL:url];
+    NSMutableURLRequest* request = [CDVInAppBrowserOptions createRequest:url headers:headers];
     
     if (_userAgentLockToken != 0) {
         [self.webView loadRequest:request];
@@ -1124,7 +1158,7 @@ BOOL isExiting = FALSE;
         viewBounds.origin.y = STATUSBAR_HEIGHT;
         viewBounds.size.height = viewBounds.size.height - STATUSBAR_HEIGHT;
         self.webView.frame = viewBounds;
-        [[UIApplication sharedApplication] setStatusBarStyle:[self preferredStatusBarStyle]];
+        //[[UIApplication sharedApplication] setStatusBarStyle:[self preferredStatusBarStyle]];
     }
     [self rePositionViews];
     
@@ -1170,7 +1204,7 @@ BOOL isExiting = FALSE;
     self.backButton.enabled = theWebView.canGoBack;
     self.forwardButton.enabled = theWebView.canGoForward;
     
-    NSLog(_browserOptions.hidespinner ? @"Yes" : @"No");
+    //NSLog(_browserOptions.hidespinner ? @"Yes" : @"No");
     if(!_browserOptions.hidespinner) {
         [self.spinner startAnimating];
     }

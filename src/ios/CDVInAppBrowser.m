@@ -89,6 +89,15 @@
     #endif
 }
 
+- (void)resize:(CDVInvokedUrlCommand*)command
+{
+    if(self.usewkwebview){
+        [[CDVWKInAppBrowser getInstance] resize:command];
+    }else{
+        [[CDVUIInAppBrowser getInstance] resize:command];
+    }
+}
+
 - (void)hide:(CDVInvokedUrlCommand*)command
 {
     #if WK_WEB_VIEW_ONLY
