@@ -48,15 +48,28 @@
                 }
             }
         },
-        _loadAfterBeforeload: function (strUrl) {
+        _loadAfterBeforeload: function (strUrl, aHeaders) {
             strUrl = urlutil.makeAbsolute(strUrl);
-            exec(null, null, 'InAppBrowser', 'loadAfterBeforeload', [strUrl]);
+
+			if (typeof(aHeaders) == 'object')
+			{
+				var sHeaders = aHeaders.join(',');
+			}
+			else
+			{
+				var sHeaders = '';
+			}
+
+            exec(null, null, 'InAppBrowser', 'loadAfterBeforeload', [strUrl, sHeaders]);
         },
         close: function (eventname) {
             exec(null, null, 'InAppBrowser', 'close', []);
         },
         show: function (eventname) {
             exec(null, null, 'InAppBrowser', 'show', []);
+        },
+        resize: function (iPosX, iPosY, iWidth, iHeight) {
+            exec(null, null, 'InAppBrowser', 'resize', [iPosX, iPosY, iWidth, iHeight]);
         },
         hide: function (eventname) {
             exec(null, null, 'InAppBrowser', 'hide', []);
@@ -97,7 +110,7 @@
         }
     };
 
-    module.exports = function (strUrl, strWindowName, strWindowFeatures, callbacks) {
+    module.exports = function (strUrl, strWindowName, strWindowFeatures, windowHeaders, callbacks) {
         // Don't catch calls that write to existing frames (e.g. named iframes).
         if (window.frames && window.frames[strWindowName]) {
             const origOpenFunc = modulemapper.getOriginalSymbol(window, 'open');
@@ -116,9 +129,32 @@
             iab._eventHandler(eventname);
         };
 
+		var strWindowHeaders = '';
+
+        if (windowHeaders) {
+            if (typeof windowHeaders === 'string' || windowHeaders instanceof String) {
+                strWindowHeaders = windowHeaders.replace(/@/gi, '@a');
+            } else {
+                var first = true;
+                for (var k in windowHeaders) {
+                    if (windowHeaders.hasOwnProperty(k)) {
+                        var key = k.replace(/@/gi, '@a').replace(/,/gi, '@c').replace(/=/gi, '@e');
+                        var value = windowHeaders[k].toString().replace(/@/gi, '@a').replace(/,/gi, '@c').replace(/=/gi, '@e');
+                        if (first) {
+                            first = false;
+                        } else {
+                            strWindowHeaders += ',';
+                        }
+                        strWindowHeaders += key + '=' + value;
+                    }
+                }
+            }
+        }
+
+
         strWindowFeatures = strWindowFeatures || '';
 
-        exec(cb, cb, 'InAppBrowser', 'open', [strUrl, strWindowName, strWindowFeatures]);
+        exec(cb, cb, 'InAppBrowser', 'open', [strUrl, strWindowName, strWindowFeatures, strWindowHeaders]);
         return iab;
     };
 })();

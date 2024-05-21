@@ -85,6 +85,7 @@ static CDVWKInAppBrowser* instance = nil;
     NSString* url = [command argumentAtIndex:0];
     NSString* target = [command argumentAtIndex:1 withDefault:kInAppBrowserTargetSelf];
     NSString* options = [command argumentAtIndex:2 withDefault:@"" andClass:[NSString class]];
+    NSString* headers = [command argumentAtIndex:3 withDefault:@"" andClass:[NSString class]];
     
     self.callbackId = command.callbackId;
     
@@ -97,11 +98,11 @@ static CDVWKInAppBrowser* instance = nil;
         }
         
         if ([target isEqualToString:kInAppBrowserTargetSelf]) {
-            [self openInCordovaWebView:absoluteUrl withOptions:options];
+            [self openInCordovaWebView:absoluteUrl withOptions:options withHeaders:headers];
         } else if ([target isEqualToString:kInAppBrowserTargetSystem]) {
             [self openInSystem:absoluteUrl];
         } else { // _blank or anything else
-            [self openInInAppBrowser:absoluteUrl withOptions:options];
+            [self openInInAppBrowser:absoluteUrl withOptions:options withHeaders:headers];
         }
         
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
@@ -113,7 +114,7 @@ static CDVWKInAppBrowser* instance = nil;
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
-- (void)openInInAppBrowser:(NSURL*)url withOptions:(NSString*)options
+- (void)openInInAppBrowser:(NSURL*)url withOptions:(NSString*)options withHeaders:(NSString*)headers
 {
     CDVInAppBrowserOptions* browserOptions = [CDVInAppBrowserOptions parseOptions:options];
     
@@ -209,14 +210,14 @@ static CDVWKInAppBrowser* instance = nil;
     }
     _waitForBeforeload = ![_beforeload isEqualToString:@""];
     
-    [self.inAppBrowserViewController navigateTo:url];
+    [self.inAppBrowserViewController navigateTo:url headers:headers];
     if (!browserOptions.hidden) {
         [self show:nil withNoAnimate:browserOptions.hidden];
     }
 }
 
 - (void)show:(CDVInvokedUrlCommand*)command{
-    [self show:command withNoAnimate:NO];
+    [self show:command withNoAnimate:YES];
 }
 
 - (void)show:(CDVInvokedUrlCommand*)command withNoAnimate:(BOOL)noAnimate
@@ -264,6 +265,36 @@ static CDVWKInAppBrowser* instance = nil;
     });
 }
 
+- (void)resize:(CDVInvokedUrlCommand*)command{
+    [self resize:command withNoAnimate:NO];
+}
+
+- (void)resize:(CDVInvokedUrlCommand*)command withNoAnimate:(BOOL)noAnimate
+{
+    if (self.inAppBrowserViewController == nil) {
+        NSLog(@"Tried to resize IAB after it was closed.");
+        return;
+    }
+
+    NSArray* arguments = [command arguments];
+    CGFloat iPosX = [[arguments objectAtIndex:0] floatValue];
+    CGFloat iPosY = [[arguments objectAtIndex:1] floatValue];
+    CGFloat iWidth = [[arguments objectAtIndex:2] floatValue];
+    CGFloat iHeight = [[arguments objectAtIndex:3] floatValue];
+
+    __weak CDVWKInAppBrowser* weakSelf = self;
+    
+    // Run later to avoid the "took a long time" log message.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (weakSelf.inAppBrowserViewController != nil) {
+            CGRect frame = CGRectMake(iPosX,iPosY,iWidth,iHeight);
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            strongSelf->tmpWindow.frame = frame;
+            //[self setWebViewFrame:self.view.bounds];
+        }
+    });
+}
+
 - (void)hide:(CDVInvokedUrlCommand*)command
 {
     // Set tmpWindow to hidden to make main webview responsive to touch again
@@ -281,14 +312,14 @@ static CDVWKInAppBrowser* instance = nil;
     // Run later to avoid the "took a long time" log message.
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self.inAppBrowserViewController != nil) {
-            [self.inAppBrowserViewController.presentingViewController dismissViewControllerAnimated:YES completion:nil];
+            [self.inAppBrowserViewController.presentingViewController dismissViewControllerAnimated:NO completion:nil];
         }
     });
 }
 
-- (void)openInCordovaWebView:(NSURL*)url withOptions:(NSString*)options
+- (void)openInCordovaWebView:(NSURL*)url withOptions:(NSString*)options  withHeaders:(NSString*)headers
 {
-    NSURLRequest* request = [NSURLRequest requestWithURL:url];
+    NSMutableURLRequest* request = [CDVInAppBrowserOptions createRequest:url headers:headers];
     // the webview engine itself will filter for this according to <allow-navigation> policy
     // in config.xml
     [self.webViewEngine loadRequest:request];
@@ -306,6 +337,7 @@ static CDVWKInAppBrowser* instance = nil;
 - (void)loadAfterBeforeload:(CDVInvokedUrlCommand*)command
 {
     NSString* urlStr = [command argumentAtIndex:0];
+    NSString* customHeaders = [command argumentAtIndex:1];
 
     if ([_beforeload isEqualToString:@""]) {
         NSLog(@"unexpected loadAfterBeforeload called without feature beforeload=get|post");
@@ -320,9 +352,19 @@ static CDVWKInAppBrowser* instance = nil;
     }
 
     NSURL* url = [NSURL URLWithString:urlStr];
-    //_beforeload = @"";
+
     _waitForBeforeload = NO;
-    [self.inAppBrowserViewController navigateTo:url];
+    
+    if (url == nil)
+    {
+        [self.inAppBrowserViewController navigateTo:url headers:nil];
+    }
+    else
+    {
+        [self.inAppBrowserViewController navigateTo:url headers:customHeaders];
+    }
+
+    //_beforeload = @"";
 }
 
 // This is a helper method for the inject{Script|Style}{Code|File} API calls, which
@@ -1041,12 +1083,12 @@ BOOL isExiting = FALSE;
     });
 }
 
-- (void)navigateTo:(NSURL*)url
+- (void)navigateTo:(NSURL*)url headers:(NSString*)headers
 {
     if ([url.scheme isEqualToString:@"file"]) {
         [self.webView loadFileURL:url allowingReadAccessToURL:url];
     } else {
-        NSURLRequest* request = [NSURLRequest requestWithURL:url];
+        NSMutableURLRequest* request = [CDVInAppBrowserOptions createRequest:url headers:headers];
         [self.webView loadRequest:request];
     }
 }

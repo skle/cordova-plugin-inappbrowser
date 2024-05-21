@@ -47,5 +47,6 @@
 @property (nonatomic, copy) NSString* beforeload;
 
 + (CDVInAppBrowserOptions*)parseOptions:(NSString*)options;
++ (NSMutableURLRequest*)createRequest:(NSURL*)url headers:(NSString*)headers;
 
 @end

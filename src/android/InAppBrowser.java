@@ -151,6 +151,16 @@ public class InAppBrowser extends CordovaPlugin {
     private boolean fullscreen = true;
     private String[] allowedSchemes;
     private InAppBrowserClient currentClient;
+    private HashMap<String, String> headers = new HashMap<String, String>();
+
+    private int dpToPixels(int dipValue) {
+        int value = (int) TypedValue.applyDimension( TypedValue.COMPLEX_UNIT_DIP,
+                (float) dipValue,
+                cordova.getActivity().getResources().getDisplayMetrics()
+        );
+
+        return value;
+    }
 
     /**
      * Executes the request and returns PluginResult.
@@ -170,6 +180,7 @@ public class InAppBrowser extends CordovaPlugin {
             }
             final String target = t;
             final HashMap<String, String> features = parseFeature(args.optString(2));
+            headers = parseHeaders(args.optString(3));
 
             LOG.d(LOG_TAG, "target = " + target);
 
@@ -235,7 +246,7 @@ public class InAppBrowser extends CordovaPlugin {
                         // load in InAppBrowser
                         else {
                             LOG.d(LOG_TAG, "loading in InAppBrowser");
-                            result = showWebPage(url, features);
+                            result = showWebPage(url, features, headers);
                         }
                     }
                     // SYSTEM
@@ -246,7 +257,7 @@ public class InAppBrowser extends CordovaPlugin {
                     // BLANK - or anything else
                     else {
                         LOG.d(LOG_TAG, "in blank");
-                        result = showWebPage(url, features);
+                        result = showWebPage(url, features, headers);
                     }
 
                     PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, result);
@@ -273,7 +284,7 @@ public class InAppBrowser extends CordovaPlugin {
                     } else {
                         ((InAppBrowserClient)inAppWebView.getWebViewClient()).waitForBeforeload = false;
                     }
-                    inAppWebView.loadUrl(url);
+                    inAppWebView.loadUrl(url, headers);
 
                 }
             });
@@ -331,6 +342,31 @@ public class InAppBrowser extends CordovaPlugin {
                 public void run() {
                     if (dialog != null && !cordova.getActivity().isFinishing()) {
                         dialog.hide();
+                    }
+                }
+            });
+            PluginResult pluginResult = new PluginResult(PluginResult.Status.OK);
+            pluginResult.setKeepCallback(true);
+            this.callbackContext.sendPluginResult(pluginResult);
+        }
+        else if (action.equals("resize")) {
+            this.cordova.getActivity().runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    WindowManager.LayoutParams lp = new WindowManager.LayoutParams();
+                    lp.copyFrom(dialog.getWindow().getAttributes());
+
+                    try {
+                        lp.x = dpToPixels(args.getInt(0));
+                        lp.y = dpToPixels(args.getInt(1));
+                        //lp.width = WindowManager.LayoutParams.MATCH_PARENT;
+                        //lp.height = WindowManager.LayoutParams.MATCH_PARENT;
+                        lp.width = dpToPixels(args.getInt(2));
+                        lp.height = dpToPixels(args.getInt(3));
+
+                        dialog.getWindow().setAttributes(lp);
+                    } catch (JSONException e) {
+
                     }
                 }
             });
@@ -450,6 +486,31 @@ public class InAppBrowser extends CordovaPlugin {
     }
 
     /**
+     * Put the headers string into a hash map
+     *
+     * @param headersString string of headers comma separated (key=value)
+     * @return map of headers
+     */
+    private HashMap<String, String> parseHeaders(String headersString) {
+        if (headersString.equals(NULL)) {
+            return null;
+        } else {
+            HashMap<String, String> map = new HashMap<String, String>();
+            StringTokenizer headers = new StringTokenizer(headersString, ",");
+            StringTokenizer header;
+            while(headers.hasMoreElements()) {
+                header = new StringTokenizer(headers.nextToken(), "=");
+                if (header.hasMoreElements()) {
+                    String key = header.nextToken().replace("@e","=").replace("@c", ",").replace("@a","@");
+                    String value = header.nextToken().replace("@e","=").replace("@c", ",").replace("@a","@");
+                    map.put(key, value);
+                }
+            }
+            return map;
+        }
+    }
+
+    /**
      * Display a new browser with the specified URL.
      *
      * @param url the url to load.
@@ -544,7 +605,7 @@ public class InAppBrowser extends CordovaPlugin {
                 // NB: From SDK 19: "If you call methods on WebView from any thread
                 // other than your app's UI thread, it can cause unexpected results."
                 // http://developer.android.com/guide/webapps/migrating.html#Threads
-                childView.loadUrl("about:blank");
+                childView.loadUrl("about:blank", null);
 
                 try {
                     JSONObject obj = new JSONObject();
@@ -601,9 +662,9 @@ public class InAppBrowser extends CordovaPlugin {
         imm.hideSoftInputFromWindow(edittext.getWindowToken(), 0);
 
         if (!url.startsWith("http") && !url.startsWith("file:")) {
-            this.inAppWebView.loadUrl("http://" + url);
+            this.inAppWebView.loadUrl("http://" + url, headers);
         } else {
-            this.inAppWebView.loadUrl(url);
+            this.inAppWebView.loadUrl(url, headers);
         }
         this.inAppWebView.requestFocus();
     }
@@ -628,7 +689,7 @@ public class InAppBrowser extends CordovaPlugin {
      * @param url the url to load.
      * @param features jsonObject
      */
-    public String showWebPage(final String url, HashMap<String, String> features) {
+    public String showWebPage(final String url, HashMap<String, String> features, final HashMap<String, String> headers) {
         // Determine if we should hide the location bar.
         showLocationBar = true;
         showZoomControls = true;
@@ -788,13 +849,23 @@ public class InAppBrowser extends CordovaPlugin {
 
                 // Let's create the main dialog
                 dialog = new InAppBrowserDialog(cordova.getActivity(), android.R.style.Theme_NoTitleBar);
-                dialog.getWindow().getAttributes().windowAnimations = android.R.style.Animation_Dialog;
+                //dialog.getWindow().getAttributes().windowAnimations = android.R.style.Animation_Dialog;
                 dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
                 if (fullscreen) {
                     dialog.getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
                 }
                 dialog.setCancelable(true);
                 dialog.setInAppBroswer(getInAppBrowser());
+
+                Window window = dialog.getWindow();
+                WindowManager.LayoutParams wlp = window.getAttributes();
+                wlp.gravity = Gravity.TOP | Gravity.LEFT;
+                wlp.width = WindowManager.LayoutParams.MATCH_PARENT;
+                //wlp.height = this.dpToPixels(windowheight);
+                wlp.dimAmount=0.5f;
+                window.setFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL, WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL);
+                window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+                window.setAttributes(wlp);
 
                 // Main container layout
                 LinearLayout main = new LinearLayout(cordova.getActivity());
@@ -1020,7 +1091,7 @@ public class InAppBrowser extends CordovaPlugin {
                 // Enable Thirdparty Cookies
                 CookieManager.getInstance().setAcceptThirdPartyCookies(inAppWebView,true);
 
-                inAppWebView.loadUrl(url);
+                inAppWebView.loadUrl(url, headers);
                 inAppWebView.setId(Integer.valueOf(6));
                 inAppWebView.getSettings().setLoadWithOverviewMode(true);
                 inAppWebView.getSettings().setUseWideViewPort(useWideViewPort);
@@ -1059,14 +1130,13 @@ public class InAppBrowser extends CordovaPlugin {
                 lp.width = WindowManager.LayoutParams.MATCH_PARENT;
                 lp.height = WindowManager.LayoutParams.MATCH_PARENT;
 
-                if (dialog != null) {
-                    dialog.setContentView(main);
-                    dialog.show();
-                    dialog.getWindow().setAttributes(lp);
-                }
+                dialog.setContentView(main);
+                dialog.show();
+                dialog.getWindow().setAttributes(lp);
+
                 // the goal of openhidden is to load the url and not display it
                 // Show() needs to be called to cause the URL to be loaded
-                if (openWindowHidden && dialog != null) {
+                if (openWindowHidden) {
                     dialog.hide();
                 }
             }
